@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Zed HTML 标签颜色预览</title>
+    </head>
+    <body style="font-family: sans-serif; padding: 20px">
+        <h1>Zed HTML 标签颜色预览</h1>
+
+        <nav><span>导航 nav</span></nav>
+        <aside><span>侧边栏 aside</span></aside>
+
+        <h2>结构性标签</h2>
+        <div>div 内容</div>
+        <span>span 内容</span>
+        <header>header 内容</header>
+        <footer>footer 内容</footer>
+        <main>main 内容</main>
+        <section>section 内容</section>
+        <article>article 内容</article>
+
+        <h2>标题</h2>
+        <h1>H1 标题</h1>
+        <h2>H2 标题</h2>
+        <h3>H3 标题</h3>
+        <h4>H4 标题</h4>
+        <h5>H5 标题</h5>
+        <h6>H6 标题</h6>
+
+        <h2>文本</h2>
+        <p>段落 p 标签</p>
+        <strong>strong 粗体</strong>
+        <em>em 斜体</em>
+
+        <h2>链接</h2>
+        <a href="#">链接 a 标签</a>
+
+        <h2>列表</h2>
+        <ul>
+            <li>ul 列表项</li>
+            <li>第二项</li>
+        </ul>
+        <ol>
+            <li>ol 列表项</li>
+            <li>第二项</li>
+        </ol>
+
+        <h2>表格</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>表头 th</th>
+                    <th>列 2</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>单元格 td</td>
+                    <td>数据</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>表单</h2>
+        <form>
+            <label>标签 label</label>
+            <!-- biome-ignore lint/a11y/useButtonType: 1> -->
+            <button>按钮 button</button>
+        </form>
+
+        <h2>媒体</h2>
+        <img
+            src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='50' height='50'%3E%3Crect fill='%2356b6c2' width='50' height='50'/%3E%3C/svg%3E"
+            alt=""
+        />
+        <!-- biome-ignore lint/a11y/noSvgWithoutTitle: 1-->
+        <svg width="50" height="50" xmlns="http://www.w3.org/2000/svg">
+            <rect fill="#56b6c2" width="50" height="50" />
+        </svg>
+        <canvas width="50" height="50" style="background: #56b6c2"></canvas>
+    </body>
+</html>
