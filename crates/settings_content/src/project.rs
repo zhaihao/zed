@@ -642,6 +642,11 @@ pub struct InlineBlameSettings {
     ///
     /// Default: false
     pub show_commit_summary: Option<bool>,
+    /// Whether to show the commit details popover when hovering over an
+    /// inline (or gutter) blame entry.
+    ///
+    /// Default: true
+    pub show_commit_hover: Option<bool>,
 }
 
 #[with_fallible_options]
