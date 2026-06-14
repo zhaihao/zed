@@ -544,6 +544,12 @@ pub struct OpenAiCompatibleEditPredictionSettings {
     /// When `true`, only `stop_strings` is sent and the built-in
     /// provider/format-specific stop tokens are discarded.
     pub replace_stop_strings: bool,
+    /// Maximum number of in-flight edit prediction requests for this provider.
+    pub max_concurrent_predictions: usize,
+    /// Debounce delay in milliseconds. When non-zero, this replaces the
+    /// built-in throttle: each new edit resets a timer of this length, and a
+    /// request is only sent once the timer elapses.
+    pub debounce_ms: u64,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -868,6 +874,8 @@ impl settings::Settings for AllLanguageSettings {
                     ollama.stop_strings_mode.unwrap_or_default(),
                     settings::EditPredictionStopStringsModeContent::Replace
                 ),
+                max_concurrent_predictions: 1,
+                debounce_ms: 0,
             });
         let openai_compatible_settings = edit_predictions.open_ai_compatible_api.unwrap();
         let openai_compatible_settings = openai_compatible_settings
@@ -888,6 +896,10 @@ impl settings::Settings for AllLanguageSettings {
                     openai_compatible_settings.stop_strings_mode.unwrap_or_default(),
                     settings::EditPredictionStopStringsModeContent::Replace
                 ),
+                max_concurrent_predictions: openai_compatible_settings
+                    .max_concurrent_predictions
+                    .unwrap_or(2) as usize,
+                debounce_ms: openai_compatible_settings.debounce_ms.unwrap_or(0) as u64,
             });
 
         let mut file_types: FxHashMap<Arc<str>, (GlobSet, Vec<String>)> = FxHashMap::default();
