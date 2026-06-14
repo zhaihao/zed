@@ -71,7 +71,10 @@ If you would like to use distinct themes for light mode/dark mode that can be se
   "agent_ui_font_size": 15,
   // Controls the font size for the agent panel's message editor, user message,
   // and any other snippet of code.
-  "agent_buffer_font_size": 12
+  "agent_buffer_font_size": 12,
+  // Controls the line height of text in the agent panel, as a multiple of the
+  // font size. If not specified, defaults to 1.3.
+  "agent_ui_line_height": 1.4
 ```
 
 ### Font ligatures
@@ -507,7 +510,10 @@ Project panel can be shown/hidden with {#action project_panel::ToggleFocus} ({#k
   "agent_ui_font_size": 15,
   // Controls the font size for the agent panel's message editor, user message,
   // and any other snippet of code.
-  "agent_buffer_font_size": 12
+  "agent_buffer_font_size": 12,
+  // Controls the line height of text in the agent panel, as a multiple of the
+  // font size. If not specified, defaults to 1.3.
+  "agent_ui_line_height": 1.4
 }
 ```
 

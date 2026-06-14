@@ -149,6 +149,10 @@ pub struct ThemeSettingsContent {
     pub agent_ui_font_size: Option<FontSize>,
     /// The font size for user messages in the agent panel.
     pub agent_buffer_font_size: Option<FontSize>,
+    /// The line height for text in the agent panel, as a multiple of the font
+    /// size. Falls back to `1.3` when unset.
+    #[schemars(range(min = 1.0))]
+    pub agent_ui_line_height: Option<f32>,
     pub git_commit_buffer_font_size: Option<FontSize>,
     /// The name of a font to use for rendering in the markdown preview.
     /// Falls back to the UI font if unset.
