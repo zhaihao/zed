@@ -166,6 +166,21 @@ pub struct CustomEditPredictionProviderSettingsContent {
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
+    /// Maximum number of in-flight edit prediction requests allowed at once.
+    /// When the limit is reached, the oldest pending request is cancelled
+    /// before a new one is sent.
+    ///
+    /// Default: 2
+    pub max_concurrent_predictions: Option<u32>,
+    /// Debounce delay (in milliseconds) before an edit prediction request is
+    /// sent. Each new edit within the delay resets the timer, so a request is
+    /// only sent after the user stops editing for this long. When set, this
+    /// replaces the built-in 300ms throttle for this provider.
+    ///
+    /// Set to `0` (the default) to keep the built-in throttle behavior.
+    ///
+    /// Default: 0
+    pub debounce_ms: Option<u32>,
     /// Additional stop strings to pass to the model. Generation will stop when
     /// any of the produced strings matches one of these.
     ///

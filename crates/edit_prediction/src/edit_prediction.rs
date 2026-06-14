@@ -38,7 +38,6 @@ use gpui::{
     http_client::{self, AsyncBody, Method},
     prelude::*,
 };
-use heapless::Vec as ArrayVec;
 use language::{
     Anchor, Buffer, BufferEditSource, BufferSnapshot, EditPredictionPromptFormat,
     EditPredictionsMode, EditPreview, File, OffsetRangeExt, Point, TextBufferSnapshot, ToOffset,
@@ -361,12 +360,14 @@ struct ProjectState {
     current_prediction: Option<CurrentEditPrediction>,
     last_edit_source: Option<BufferEditSource>,
     next_pending_prediction_id: usize,
-    pending_predictions: ArrayVec<PendingPrediction, 2, u8>,
+    pending_predictions: Vec<PendingPrediction>,
     pending_jump_example_captures: Vec<PendingJumpExampleCapture>,
     starting_jump_example_captures: Vec<PendingJumpExampleCaptureKey>,
     debug_tx: Option<mpsc::UnboundedSender<DebugEvent>>,
     last_edit_prediction_refresh: Option<(EntityId, Instant)>,
     last_jump_prediction_refresh: Option<(EntityId, Instant)>,
+    last_edit_debounce_generation: u64,
+    last_jump_debounce_generation: u64,
     cancelled_predictions: HashSet<usize>,
     context: Entity<RelatedExcerptStore>,
     license_detection_watchers: HashMap<WorktreeId, Rc<LicenseDetectionWatcher>>,
@@ -1339,12 +1340,14 @@ impl EditPredictionStore {
                 current_prediction: None,
                 last_edit_source: None,
                 cancelled_predictions: HashSet::default(),
-                pending_predictions: ArrayVec::new(),
+                pending_predictions: Vec::new(),
                 pending_jump_example_captures: Vec::new(),
                 starting_jump_example_captures: Vec::new(),
                 next_pending_prediction_id: 0,
                 last_edit_prediction_refresh: None,
                 last_jump_prediction_refresh: None,
+                last_edit_debounce_generation: 0,
+                last_jump_debounce_generation: 0,
                 license_detection_watchers: HashMap::default(),
                 _subscriptions: [
                     cx.subscribe(&project, Self::handle_project_event),
@@ -2490,11 +2493,33 @@ impl EditPredictionStore {
             }
         }
 
+        fn select_debounce_generation(
+            project_state: &mut ProjectState,
+            request_trigger: PredictEditsRequestTrigger,
+        ) -> &mut u64 {
+            match request_trigger {
+                PredictEditsRequestTrigger::Diagnostics
+                | PredictEditsRequestTrigger::DiagnosticNavigation => {
+                    &mut project_state.last_jump_debounce_generation
+                }
+                _ => &mut project_state.last_edit_debounce_generation,
+            }
+        }
+
         let (needs_acceptance_tracking, max_pending_predictions) =
             match all_language_settings(None, cx).edit_predictions.provider {
                 EditPredictionProvider::Zed | EditPredictionProvider::Mercury => (true, 2),
                 EditPredictionProvider::Ollama => (false, 1),
-                EditPredictionProvider::OpenAiCompatibleApi => (false, 2),
+                EditPredictionProvider::OpenAiCompatibleApi => {
+                    let max = all_language_settings(None, cx)
+                        .edit_predictions
+                        .open_ai_compatible_api
+                        .as_ref()
+                        .map(|settings| settings.max_concurrent_predictions)
+                        .unwrap_or(2)
+                        .max(1);
+                    (false, max)
+                }
                 EditPredictionProvider::None
                 | EditPredictionProvider::Copilot
                 | EditPredictionProvider::Codestral => {
@@ -2503,16 +2528,44 @@ impl EditPredictionStore {
                 }
             };
 
+        // When a debounce delay is configured for the OpenAI-compatible
+        // provider, the built-in 300ms throttle is bypassed entirely: each new
+        // request bumps a generation counter and waits a fixed delay; any
+        // request that isn't the latest generation by the time its delay
+        // elapses is discarded. This is true debounce (only the last edit in a
+        // burst fires) rather than throttle.
+        let debounce_ms = match all_language_settings(None, cx).edit_predictions.provider {
+            EditPredictionProvider::OpenAiCompatibleApi => all_language_settings(None, cx)
+                .edit_predictions
+                .open_ai_compatible_api
+                .as_ref()
+                .map(|settings| settings.debounce_ms)
+                .unwrap_or(0),
+            _ => 0,
+        };
+
         let drop_on_cancel = !needs_acceptance_tracking;
         let throttle_timeout = Self::THROTTLE_TIMEOUT;
         let project_state = self.get_or_init_project(&project, cx);
         let pending_prediction_id = project_state.next_pending_prediction_id;
         project_state.next_pending_prediction_id += 1;
+        // In debounce mode, claim a new generation now so that any later enqueued
+        // request supersedes this one. In throttle mode, keep the existing
+        // timestamp-based behavior.
+        let debounce_generation_at_enqueue = if debounce_ms > 0 {
+            let generation = select_debounce_generation(project_state, request_trigger);
+            *generation += 1;
+            *generation
+        } else {
+            0
+        };
         let throttle_at_enqueue = *select_throttle(project_state, request_trigger);
 
         let task = cx.spawn(async move |this, cx| {
-            let throttle_wait = this
-                .update(cx, |this, cx| {
+            let throttle_wait = if debounce_ms > 0 {
+                Some(Duration::from_millis(debounce_ms))
+            } else {
+                this.update(cx, |this, cx| {
                     let project_state = this.get_or_init_project(&project, cx);
                     let throttle = *select_throttle(project_state, request_trigger);
 
@@ -2525,13 +2578,14 @@ impl EditPredictionStore {
                     })
                 })
                 .ok()
-                .flatten();
+                .flatten()
+            };
 
             if let Some(timeout) = throttle_wait {
                 cx.background_executor().timer(timeout).await;
             }
 
-            // If this task was cancelled before the throttle timeout expired,
+            // If this task was cancelled before the wait expired,
             // do not perform a request. Also skip if another task already
             // proceeded since we were enqueued (duplicate).
             let mut is_cancelled = true;
@@ -2544,9 +2598,18 @@ impl EditPredictionStore {
                     return;
                 }
 
-                // Another request has been already sent since this was enqueued
-                if *select_throttle(project_state, request_trigger) != throttle_at_enqueue {
-                    return;
+                if debounce_ms > 0 {
+                    // Debounce: only the most recently enqueued generation may proceed.
+                    if *select_debounce_generation(project_state, request_trigger)
+                        != debounce_generation_at_enqueue
+                    {
+                        return;
+                    }
+                } else {
+                    // Throttle: another request has been already sent since this was enqueued.
+                    if *select_throttle(project_state, request_trigger) != throttle_at_enqueue {
+                        return;
+                    }
                 }
 
                 let new_refresh = (throttle_entity, cx.background_executor().now());
@@ -2659,8 +2722,7 @@ impl EditPredictionStore {
                     id: pending_prediction_id,
                     task,
                     drop_on_cancel,
-                })
-                .unwrap();
+                });
         } else {
             let pending_prediction = project_state.pending_predictions.pop().unwrap();
             project_state
@@ -2669,8 +2731,7 @@ impl EditPredictionStore {
                     id: pending_prediction_id,
                     task,
                     drop_on_cancel,
-                })
-                .unwrap();
+                });
             project_state.cancel_pending_prediction(pending_prediction, cx);
         }
     }
