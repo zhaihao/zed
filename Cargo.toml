@@ -981,9 +981,9 @@ zed = { codegen-units = 16 }
 
 [profile.release-fast]
 inherits = "release"
-debug = "full"
+debug = "limited"
 lto = false
-codegen-units = 16
+codegen-units = 32
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow" }
