@@ -111,6 +111,9 @@ pub struct MarkdownStyle {
     pub height_is_multiple_of_line_height: bool,
     pub prevent_mouse_interaction: bool,
     pub table_columns_min_size: bool,
+    /// The line height, as a multiple of the font size, applied to paragraphs
+    /// and list items. Defaults to `1.3`.
+    pub line_height: f32,
 }
 
 impl Default for MarkdownStyle {
@@ -134,6 +137,7 @@ impl Default for MarkdownStyle {
             height_is_multiple_of_line_height: false,
             prevent_mouse_interaction: false,
             table_columns_min_size: false,
+            line_height: 1.3,
         }
     }
 }
@@ -299,6 +303,11 @@ impl MarkdownStyle {
                     }),
                 },
             ),
+            line_height: if matches!(font, MarkdownFont::Agent) {
+                theme_settings.agent_ui_line_height()
+            } else {
+                1.3
+            },
             ..Default::default()
         }
     }
@@ -1303,7 +1312,7 @@ impl MarkdownElement {
     ) {
         let align = text_align_override.unwrap_or(self.style.base_text_style.text_align);
         let mut paragraph = div().when(!self.style.height_is_multiple_of_line_height, |el| {
-            el.mb_2().line_height(rems(1.3))
+            el.mb_2().line_height(rems(self.style.line_height))
         });
 
         paragraph = match align {
@@ -1528,7 +1537,9 @@ impl MarkdownElement {
         builder.push_div(
             div()
                 .when(!self.style.height_is_multiple_of_line_height, |el| {
-                    el.mb_1().gap_1().line_height(rems(1.3))
+                    el.mb_1()
+                        .gap_1()
+                        .line_height(rems(self.style.line_height))
                 })
                 .h_flex()
                 .items_start()
@@ -2262,7 +2273,7 @@ impl Element for MarkdownElement {
                                 div()
                                     .pt_1()
                                     .mb_1()
-                                    .line_height(rems(1.3))
+                                    .line_height(rems(self.style.line_height))
                                     .text_size(rems(0.85))
                                     .h_flex()
                                     .items_start()

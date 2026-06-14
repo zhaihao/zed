@@ -56,6 +56,9 @@ pub struct ThemeSettings {
     agent_ui_font_size: Option<Pixels>,
     /// The agent buffer font size. Determines the size of user messages in the agent panel.
     agent_buffer_font_size: Option<Pixels>,
+    /// The line height for text in the agent panel, as a multiple of the font
+    /// size. Falls back to `1.3` when unset.
+    agent_ui_line_height: Option<f32>,
     git_commit_buffer_font_size: Option<Pixels>,
     /// The font family to use for rendering in the markdown preview.
     /// Falls back to the UI font family if unset.
@@ -481,6 +484,12 @@ impl ThemeSettings {
         f32::max(self.buffer_line_height.value(), MIN_LINE_HEIGHT)
     }
 
+    /// Returns the agent panel's line height, as a multiple of the font size.
+    /// Falls back to `1.3` when unset.
+    pub fn agent_ui_line_height(&self) -> f32 {
+        f32::max(self.agent_ui_line_height.unwrap_or(1.3), MIN_LINE_HEIGHT)
+    }
+
     /// Applies the theme overrides, if there are any, to the current theme.
     pub fn apply_theme_overrides(&self, mut arc_theme: Arc<Theme>) -> Arc<Theme> {
         if let Some(experimental_theme_overrides) = &self.experimental_theme_overrides {
@@ -692,6 +701,7 @@ impl settings::Settings for ThemeSettings {
             buffer_line_height: content.buffer_line_height.unwrap().into(),
             agent_ui_font_size: content.agent_ui_font_size.map(|s| s.into_gpui()),
             agent_buffer_font_size: content.agent_buffer_font_size.map(|s| s.into_gpui()),
+            agent_ui_line_height: content.agent_ui_line_height,
             git_commit_buffer_font_size: content.git_commit_buffer_font_size.map(|s| s.into_gpui()),
             markdown_preview_font_family: content
                 .markdown_preview_font_family
