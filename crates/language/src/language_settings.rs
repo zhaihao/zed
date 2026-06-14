@@ -537,6 +537,13 @@ pub struct OpenAiCompatibleEditPredictionSettings {
     /// The prompt format to use for completions. When `None`, the format
     /// will be derived from the model name at request time.
     pub prompt_format: EditPredictionPromptFormat,
+    /// Additional stop strings to append to the built-in stop tokens for
+    /// this provider/format, or to replace them when `replace_stop_strings`
+    /// is set.
+    pub stop_strings: Vec<String>,
+    /// When `true`, only `stop_strings` is sent and the built-in
+    /// provider/format-specific stop tokens are discarded.
+    pub replace_stop_strings: bool,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -856,6 +863,11 @@ impl settings::Settings for AllLanguageSettings {
                 max_output_tokens: ollama.max_output_tokens.unwrap(),
                 api_url: ollama.api_url.unwrap().into(),
                 prompt_format: ollama.prompt_format.unwrap().into(),
+                stop_strings: ollama.stop_strings.unwrap_or_default(),
+                replace_stop_strings: matches!(
+                    ollama.stop_strings_mode.unwrap_or_default(),
+                    settings::EditPredictionStopStringsModeContent::Replace
+                ),
             });
         let openai_compatible_settings = edit_predictions.open_ai_compatible_api.unwrap();
         let openai_compatible_settings = openai_compatible_settings
@@ -871,6 +883,11 @@ impl settings::Settings for AllLanguageSettings {
                 max_output_tokens: openai_compatible_settings.max_output_tokens.unwrap(),
                 api_url: api_url.into(),
                 prompt_format: openai_compatible_settings.prompt_format.unwrap().into(),
+                stop_strings: openai_compatible_settings.stop_strings.unwrap_or_default(),
+                replace_stop_strings: matches!(
+                    openai_compatible_settings.stop_strings_mode.unwrap_or_default(),
+                    settings::EditPredictionStopStringsModeContent::Replace
+                ),
             });
 
         let mut file_types: FxHashMap<Arc<str>, (GlobSet, Vec<String>)> = FxHashMap::default();
