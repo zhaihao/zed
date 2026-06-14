@@ -66,10 +66,18 @@ pub(crate) async fn send_custom_server_request(
     settings: &OpenAiCompatibleEditPredictionSettings,
     prompt: String,
     max_tokens: u32,
-    stop_tokens: Vec<String>,
+    mut stop_tokens: Vec<String>,
     api_key: Option<Arc<str>>,
     http_client: &Arc<dyn http_client::HttpClient>,
 ) -> Result<(String, String)> {
+    // Apply the user-configured stop strings: either append them to the
+    // built-in ones, or replace the built-in ones entirely.
+    if settings.replace_stop_strings {
+        stop_tokens = settings.stop_strings.clone();
+    } else {
+        stop_tokens.extend(settings.stop_strings.iter().cloned());
+    }
+
     match provider {
         settings::EditPredictionProvider::Ollama => {
             let response = crate::ollama::make_request(

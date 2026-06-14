@@ -166,6 +166,44 @@ pub struct CustomEditPredictionProviderSettingsContent {
     ///
     /// Default: 256
     pub max_output_tokens: Option<u32>,
+    /// Additional stop strings to pass to the model. Generation will stop when
+    /// any of the produced strings matches one of these.
+    ///
+    /// Whether these are combined with the provider/format-specific stop tokens
+    /// or replace them is controlled by `stop_strings_mode`.
+    ///
+    /// Default: []
+    pub stop_strings: Option<Vec<String>>,
+    /// How `stop_strings` is applied to the request.
+    ///
+    /// - `"append"`: combine `stop_strings` with the built-in
+    ///   provider/format-specific stop tokens (default).
+    /// - `"replace"`: use only `stop_strings`, discarding the built-in stop
+    ///   tokens.
+    ///
+    /// Default: "append"
+    pub stop_strings_mode: Option<EditPredictionStopStringsModeContent>,
+}
+
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    MergeFrom,
+    strum::VariantArray,
+    strum::VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum EditPredictionStopStringsModeContent {
+    #[default]
+    Append,
+    Replace,
 }
 
 #[derive(
@@ -280,6 +318,23 @@ pub struct OllamaEditPredictionSettingsContent {
     ///
     /// Default: ""
     pub prompt_format: Option<EditPredictionPromptFormatContent>,
+    /// Additional stop strings to pass to the model. Generation will stop when
+    /// any of the produced strings matches one of these.
+    ///
+    /// Whether these are combined with the provider/format-specific stop tokens
+    /// or replace them is controlled by `stop_strings_mode`.
+    ///
+    /// Default: []
+    pub stop_strings: Option<Vec<String>>,
+    /// How `stop_strings` is applied to the request.
+    ///
+    /// - `"append"`: combine `stop_strings` with the built-in
+    ///   provider/format-specific stop tokens (default).
+    /// - `"replace"`: use only `stop_strings`, discarding the built-in stop
+    ///   tokens.
+    ///
+    /// Default: "append"
+    pub stop_strings_mode: Option<EditPredictionStopStringsModeContent>,
 }
 
 /// Controls whether Zed collects training data when using Zed's Edit Predictions.
