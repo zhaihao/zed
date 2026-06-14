@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+
+# Build a Zed.app for local use from an incrementally-compiled `release-fast`
+# profile. Unlike `bundle-mac` (which targets `--release` for CI/release and
+# rebuilds from scratch), this reuses the `target/release-fast` artifacts you
+# already get from `cargo run --profile release-fast --package zed`, so repeated
+# bundles are fast.
+#
+# Usage: script/bundle-mac-local [options] [architecture=host]
+#   -o          Open the resulting .app when done
+#   -i          Install into /Applications
+#   --no-build  Skip the cargo build step (use the existing target/release-fast binaries)
+#   -h          Show this help
+
+set -euo pipefail
+
+profile="release-fast"
+open_result=false
+local_install=false
+do_build=true
+
+help_info() {
+  echo "
+Usage: ${0##*/} [options] [architecture=host]
+Build a local Zed.app from the incrementally-compiled ${profile} profile.
+
+Options:
+  -o           Open the resulting .app when done.
+  -i           Install the resulting .app into /Applications.
+  --no-build   Skip the cargo build step (reuse existing target/${profile} binaries).
+  -h           Display this help and exit.
+  "
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) open_result=true; shift;;
+        -i) local_install=true; shift;;
+        --no-build) do_build=false; shift;;
+        -h|--help) help_info; exit 0;;
+        --) shift; break;;
+        -*) echo "Unknown option: $1"; help_info; exit 1;;
+        *) break;;
+    esac
+done
+
+# Optional architecture override, otherwise host triple.
+target_arg=""
+if [[ $# -gt 0 && -n "$1" ]]; then
+    target_arg="$1"
+fi
+
+# Get release channel
+pushd crates/zed >/dev/null
+channel=$(<RELEASE_CHANNEL)
+export ZED_RELEASE_CHANNEL="${channel}"
+popd >/dev/null
+
+export ZED_BUNDLE=true
+# Incremental compilation for any build this script triggers.
+export CARGO_INCREMENTAL=true
+
+# Ensure the zed fork of cargo-bundle is installed (it supports --profile).
+cargo_bundle_version=$(cargo -q bundle --help 2>&1 | head -n 1 || echo "")
+if [ "$cargo_bundle_version" != "cargo-bundle v0.6.1-zed" ]; then
+    cargo install cargo-bundle --git https://github.com/zed-industries/cargo-bundle.git --branch zed-deploy
+fi
+
+# Deal with versions of macOS that don't include libstdc++ headers
+export CXXFLAGS="-stdlib=libc++"
+
+version_info=$(rustc --version --verbose)
+host_line=$(echo "$version_info" | grep host)
+target_triple=${host_line#*: }
+if [[ -n "$target_arg" ]]; then
+    target_triple="$target_arg"
+fi
+arch_suffix=""
+
+if [[ "$target_triple" = "x86_64-apple-darwin" ]]; then
+    arch_suffix="x86_64"
+elif [[ "$target_triple" = "aarch64-apple-darwin" ]]; then
+    arch_suffix="aarch64"
+else
+    echo "Unsupported architecture $target_triple"
+    exit 1
+fi
+
+rustup target add "$target_triple"
+
+if [ "$do_build" = true ]; then
+    echo "Compiling zed + cli (incremental, ${profile})"
+    cargo build --profile "$profile" --package zed --package cli --target "$target_triple"
+    # Build remote_server in a separate invocation to prevent feature unification
+    # from other crates influencing dynamic libraries required by it.
+    echo "Compiling remote_server (incremental, ${profile})"
+    cargo build --profile "$profile" --package remote_server --target "$target_triple"
+else
+    echo "Skipping build (--no-build); using existing target/${target_triple}/${profile} binaries"
+fi
+
+# Sanity-check the main binary exists before we try to bundle.
+if [[ ! -f "target/${target_triple}/${profile}/zed" ]]; then
+    echo "target/${target_triple}/${profile}/zed not found. Run without --no-build first."
+    exit 1
+fi
+
+echo "Creating application bundle"
+pushd crates/zed >/dev/null
+cp Cargo.toml Cargo.toml.backup
+# cargo-bundle reads package.metadata.bundle; the per-channel key (e.g.
+# bundle-stable) is rewritten to the bare `bundle` key it expects.
+sed \
+    -i.backup \
+    "s/package.metadata.bundle-${channel}/package.metadata.bundle/" \
+    Cargo.toml
+
+app_path=$(cargo bundle --profile "$profile" --target "$target_triple" --select-workspace-root | xargs)
+
+mv Cargo.toml.backup Cargo.toml
+popd >/dev/null
+echo "Bundled ${app_path}"
+
+# DocumentTypes.plist references CFBundleTypeIconFile "Document".
+document_icon_source="crates/zed/resources/Document.icns"
+document_icon_target="${app_path}/Contents/Resources/Document.icns"
+if [[ -f "${document_icon_source}" ]]; then
+    mkdir -p "$(dirname "${document_icon_target}")"
+    cp "${document_icon_source}" "${document_icon_target}"
+else
+    echo "cargo::warning=Missing ${document_icon_source}; macOS document icons may not appear in Finder."
+fi
+
+# Embed the cli binary alongside the main zed binary (cargo-bundle only copies the main bin).
+if [[ -f "target/${target_triple}/${profile}/cli" ]]; then
+    cp "target/${target_triple}/${profile}/cli" "${app_path}/Contents/MacOS/cli"
+else
+    echo "target/${target_triple}/${profile}/cli not found; skipping cli"
+fi
+
+# Read the git version from the official bundle-mac script so this stays in sync
+# automatically — no need to bump two places when the bundled dugite version changes.
+BUNDLE_MAC="script/bundle-mac"
+if [[ ! -f "$BUNDLE_MAC" ]]; then
+    echo "Missing $BUNDLE_MAC — cannot read bundled git version."
+    exit 1
+fi
+GIT_VERSION=$(grep -E '^GIT_VERSION=' "$BUNDLE_MAC" | head -n1 | cut -d= -f2- | tr -d '"'"'"'')
+GIT_VERSION_SHA=$(grep -E '^GIT_VERSION_SHA=' "$BUNDLE_MAC" | head -n1 | cut -d= -f2- | tr -d '"'"'"'')
+if [[ -z "$GIT_VERSION" || -z "$GIT_VERSION_SHA" ]]; then
+    echo "Could not read GIT_VERSION/GIT_VERSION_SHA from $BUNDLE_MAC."
+    exit 1
+fi
+
+function download_and_unpack() {
+    local url=$1
+    local path_to_unpack=$2
+    local target_path=$3
+
+    temp_dir=$(mktemp -d)
+
+    if ! command -v curl &> /dev/null; then
+        echo "curl is not installed. Please install curl to continue."
+        exit 1
+    fi
+
+    curl --silent --fail --location "$url" | tar -xvz -C "$temp_dir" -f - "$path_to_unpack"
+
+    mv "$temp_dir/$path_to_unpack" "$target_path"
+
+    rm -rf "$temp_dir"
+}
+
+# Cache the downloaded git binary so repeated local bundles don't re-download it.
+# Keyed by arch so x86_64 and aarch64 don't clobber each other.
+GIT_CACHE_DIR="target/git-binaries"
+
+function download_git() {
+    local architecture=$1
+    local target_binary=$2
+
+    local cache_path="${GIT_CACHE_DIR}/git-${architecture}"
+    if [[ -f "$cache_path" ]]; then
+        echo "Using cached git binary ($cache_path)"
+        cp "$cache_path" "$target_binary"
+        return
+    fi
+
+    echo "Downloading git binary (will be cached at $cache_path)"
+    mkdir -p "$GIT_CACHE_DIR"
+
+    tmp_dir=$(mktemp -d)
+    pushd "$tmp_dir" >/dev/null
+
+    case "$architecture" in
+        aarch64-apple-darwin)
+            download_and_unpack "https://github.com/desktop/dugite-native/releases/download/${GIT_VERSION}/dugite-native-${GIT_VERSION}-${GIT_VERSION_SHA}-macOS-arm64.tar.gz" bin/git ./git
+            ;;
+        x86_64-apple-darwin)
+            download_and_unpack "https://github.com/desktop/dugite-native/releases/download/${GIT_VERSION}/dugite-native-${GIT_VERSION}-${GIT_VERSION_SHA}-macOS-x64.tar.gz" bin/git ./git
+            ;;
+        *)
+            echo "Unsupported architecture: $architecture"
+            exit 1
+            ;;
+    esac
+
+    popd >/dev/null
+
+    mv "${tmp_dir}/git" "$cache_path"
+    rm -rf "$tmp_dir"
+    cp "$cache_path" "$target_binary"
+}
+
+echo "Preparing Frameworks dir and bundled git"
+rm -rf "${app_path}/Contents/Frameworks"
+mkdir -p "${app_path}/Contents/Frameworks"
+
+# download_git caches the binary under target/git-binaries/ after the first
+# download, so repeated local bundles don't re-download it.
+download_git "${target_triple}" "${app_path}/Contents/MacOS/git"
+
+# Package the remote_server for the in-app "remote" flow (matches bundle-mac output location).
+if [[ -f "target/${target_triple}/${profile}/remote_server" ]]; then
+    echo "Packaging remote_server"
+    gzip -f --stdout --best "target/${target_triple}/${profile}/remote_server" > "target/zed-remote-server-macos-${arch_suffix}.gz"
+fi
+
+# Prepare entitlements. The dev entitlements don't include associated-domains, but
+# mirror bundle-mac's fallback to be safe for other channels: strip that key so an
+# ad-hoc (unsigned-by-Apple) build can still run with the entitlements it's allowed.
+entitlements_file="${app_path}/Contents/Resources/zed.entitlements"
+mkdir -p "$(dirname "${entitlements_file}")"
+if grep -q "com.apple.developer.associated-domains" crates/zed/resources/zed.entitlements; then
+    cat crates/zed/resources/zed.entitlements | sed '/com.apple.developer.associated-domains/,+1d' > "$entitlements_file"
+else
+    cp crates/zed/resources/zed.entitlements "$entitlements_file"
+fi
+
+echo "Ad-hoc code signing (no Apple certificate)"
+codesign --force --deep --entitlements "$entitlements_file" --sign "${MACOS_SIGNING_KEY:--}" "${app_path}" -v
+
+bundle_name=$(basename "$app_path")
+
+if [ "$local_install" = true ]; then
+    rm -rf "/Applications/$bundle_name"
+    cp -R "$app_path" "/Applications/$bundle_name"
+    rm -rf "$app_path"
+    app_path="/Applications/$bundle_name"
+    echo "Installed application bundle: $app_path"
+fi
+
+if [ "$open_result" = true ]; then
+    echo "Opening $app_path"
+    open "$app_path"
+fi
+
+echo
+echo "Done. App bundle:"
+echo "  $app_path"
