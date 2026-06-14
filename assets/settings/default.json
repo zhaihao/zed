@@ -1611,6 +1611,8 @@
       "padding": 7,
       // Whether or not to display the git commit summary on the same line.
       "show_commit_summary": false,
+      // Whether to show the commit details popover when hovering over a blame entry.
+      "show_commit_hover": true,
       // The minimum column number to show the inline blame information at
       "min_column": 0,
     },

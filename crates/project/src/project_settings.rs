@@ -549,6 +549,11 @@ pub struct InlineBlameSettings {
     ///
     /// Default: false
     pub show_commit_summary: bool,
+    /// Whether to show the commit details popover when hovering over an
+    /// inline (or gutter) blame entry.
+    ///
+    /// Default: true
+    pub show_commit_hover: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -667,6 +672,7 @@ impl Settings for ProjectSettings {
                     padding: inline.padding.unwrap(),
                     min_column: inline.min_column.unwrap(),
                     show_commit_summary: inline.show_commit_summary.unwrap(),
+                    show_commit_hover: inline.show_commit_hover.unwrap(),
                 }
             },
             blame: {

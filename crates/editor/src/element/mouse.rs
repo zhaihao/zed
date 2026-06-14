@@ -10,7 +10,7 @@ use gpui::{
     Window, anchored, deferred, point, px,
 };
 use multi_buffer::MultiBufferRow;
-use project::DisableAiSettings;
+use project::{DisableAiSettings, project_settings::ProjectSettings};
 use settings::Settings;
 use sum_tree::Bias;
 use text::SelectionGoal;
@@ -97,7 +97,12 @@ impl EditorElement {
                 .as_ref()
                 .is_some_and(|state| state.keyboard_grace);
 
-            if mouse_over_inline_blame || mouse_over_popover {
+            let hover_enabled = ProjectSettings::get_global(cx)
+                .git
+                .inline_blame
+                .show_commit_hover;
+
+            if hover_enabled && (mouse_over_inline_blame || mouse_over_popover) {
                 editor.show_blame_popover(*buffer_id, blame_entry, event.position, false, cx);
             } else if !keyboard_grace {
                 editor.hide_blame_popover(false, cx);
