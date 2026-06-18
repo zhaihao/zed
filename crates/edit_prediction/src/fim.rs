@@ -120,7 +120,8 @@ pub fn request_prediction(
             (response_received_at - request_start).as_secs_f64()
         );
 
-        let completion: Arc<str> = clean_fim_completion(&response_text).into();
+        let cleaned = clean_fim_completion(&response_text);
+        let completion: Arc<str> = trim_suffix_overlap(&cleaned, &suffix).into();
         let edits = if completion.is_empty() {
             vec![]
         } else {
@@ -241,4 +242,166 @@ fn clean_fim_completion(response: &str) -> String {
     }
 
     result
+}
+
+/// Remove the maximum overlap between the tail of `generated` and the head of
+/// `suffix`.
+///
+/// Many code models (Qwen3-Coder, Codestral, DeepSeek-Coder, ...) re-emit part
+/// of the suffix they were given. Applying such a completion verbatim would
+/// duplicate that text in the buffer, so we trim it before inserting.
+///
+/// Whitespace differences are tolerated during comparison: `") {"` matches
+/// `" ) {"`. The cut is performed on the original `generated`, removing the
+/// matched non-whitespace characters together with any whitespace that sits
+/// between them and the rest of the completion.
+fn trim_suffix_overlap<'a>(generated: &'a str, suffix: &str) -> &'a str {
+    let gen_nonws: Vec<char> = generated.chars().filter(|c| !c.is_whitespace()).collect();
+    let suf_nonws: Vec<char> = suffix.chars().filter(|c| !c.is_whitespace()).collect();
+
+    // Find the largest k such that the tail of `gen_nonws` equals the head of
+    // `suf_nonws`.
+    let max_k = gen_nonws.len().min(suf_nonws.len());
+    let mut best_k = 0;
+    for k in (1..=max_k).rev() {
+        if gen_nonws[gen_nonws.len() - k..] == suf_nonws[..k] {
+            best_k = k;
+            break;
+        }
+    }
+
+    if best_k == 0 {
+        return generated;
+    }
+
+    // Walk the original `generated` from the end. We need to drop the last
+    // `best_k` non-whitespace characters plus any whitespace trailing right
+    // before them. Count off the non-whitespace characters first; once counted,
+    // keep eating preceding whitespace. `cut_byte` is the earliest byte index
+    // still belonging to the dropped region.
+    let mut remaining = best_k;
+    let mut cut_byte = generated.len();
+    for (byte_idx, ch) in generated.char_indices().rev() {
+        if ch.is_whitespace() {
+            if remaining == 0 {
+                // Whitespace immediately preceding the matched tail: drop it.
+                cut_byte = byte_idx;
+                continue;
+            } else {
+                // Whitespace interleaved within the matched characters: drop it.
+                cut_byte = byte_idx;
+                continue;
+            }
+        }
+
+        if remaining == 0 {
+            break;
+        }
+
+        remaining -= 1;
+        cut_byte = byte_idx;
+    }
+
+    if remaining > 0 {
+        return generated;
+    }
+
+    &generated[..cut_byte]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_suffix_overlap;
+
+    #[test]
+    fn example_1_person_counter() {
+        // fim.md 示例 1
+        let generated = "{ person: string }) {";
+        let suffix = ") {\n  return <></>\n}";
+        assert_eq!(trim_suffix_overlap(generated, suffix), "{ person: string }");
+    }
+
+    #[test]
+    fn example_2_html_div() {
+        // fim.md 示例 2
+        let generated = "<p>Hello</p></div>";
+        let suffix = "</div>";
+        assert_eq!(trim_suffix_overlap(generated, suffix), "<p>Hello</p>");
+    }
+
+    #[test]
+    fn example_3_foo_brace() {
+        // fim.md 示例 3：generated 末尾的 `\n}` 与 suffix 的 `}` 重叠，
+        // 匹配的非空白字符是 `}`，紧贴它的 `\n` 也一并删除。
+        let generated = "foo();\n}";
+        let suffix = "}";
+        assert_eq!(trim_suffix_overlap(generated, suffix), "foo();");
+    }
+
+    #[test]
+    fn whitespace_tolerant_paren_brace() {
+        // fim.md 空白处理：generated `) {` vs suffix ` ) {`，忽略空白后
+        // 整段都是重叠，结果为空。
+        assert_eq!(trim_suffix_overlap(") {", " ) {"), "");
+    }
+
+    #[test]
+    fn newline_then_brace_vs_brace() {
+        // fim.md 空白处理：generated `\n}` vs suffix `}`。
+        assert_eq!(trim_suffix_overlap("\n}", "}"), "");
+    }
+
+    #[test]
+    fn no_overlap() {
+        assert_eq!(trim_suffix_overlap("foo()", "}"), "foo()");
+        assert_eq!(trim_suffix_overlap("abc", "xyz"), "abc");
+    }
+
+    #[test]
+    fn empty_generated() {
+        assert_eq!(trim_suffix_overlap("", "abc"), "");
+    }
+
+    #[test]
+    fn empty_suffix() {
+        assert_eq!(trim_suffix_overlap("abc", ""), "abc");
+    }
+
+    #[test]
+    fn fully_repeated_suffix() {
+        // 整段生成都是 suffix 开头内容的复读 -> 全部删除。
+        assert_eq!(trim_suffix_overlap("}", "}"), "");
+        assert_eq!(trim_suffix_overlap("</div>", "</div>"), "");
+    }
+
+    #[test]
+    fn multiline_overlap_block_boundary() {
+        // fim.md 常见重复：`) {` block 边界跨行。
+        let generated = "let x = 1\n) {\n}";
+        let suffix = ") {\n}";
+        assert_eq!(trim_suffix_overlap(generated, suffix), "let x = 1");
+    }
+
+    #[test]
+    fn utf8_multibyte_boundary() {
+        // 多字节字符不应被切断。
+        let generated = "你好世界】";
+        let suffix = "】结尾";
+        assert_eq!(trim_suffix_overlap(generated, suffix), "你好世界");
+    }
+
+    #[test]
+    fn keeps_unrelated_trailing_whitespace() {
+        // 没有重叠时，generated 末尾空白保留。
+        assert_eq!(trim_suffix_overlap("foo();\n", "}"), "foo();\n");
+    }
+
+    #[test]
+    fn partial_overlap_in_middle() {
+        // generated 末尾 `</span>` 与 suffix `</span>` 重叠，
+        // 但 generated 前面还有 `<li>x</li>` 之间有空格，重叠部分之前的内容保留。
+        let generated = "<li>x</li> </span>";
+        let suffix = "</span></ul>";
+        assert_eq!(trim_suffix_overlap(generated, suffix), "<li>x</li>");
+    }
 }
